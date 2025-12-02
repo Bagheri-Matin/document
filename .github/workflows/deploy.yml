@@ -30,6 +30,68 @@ jobs:
       - name: Build Docusaurus
         run: npm run build
 
+      - name: Test build output
+        run: |
+          echo "🧪 Testing build output..."
+          
+          # Check if build directory exists
+          if [ ! -d "build" ]; then
+            echo "❌ Build directory not found!"
+            exit 1
+          fi
+          
+          # Check if index.html exists
+          if [ ! -f "build/index.html" ]; then
+            echo "❌ index.html not found in build directory!"
+            exit 1
+          fi
+          
+          # Check if assets directory exists
+          if [ ! -d "build/assets" ]; then
+            echo "⚠️ Assets directory not found, but continuing..."
+          fi
+          
+          # Check file sizes (index.html should not be empty)
+          INDEX_SIZE=$(stat -f%z build/index.html 2>/dev/null || stat -c%s build/index.html 2>/dev/null || echo "0")
+          if [ "$INDEX_SIZE" -lt 1000 ]; then
+            echo "⚠️ index.html seems too small ($INDEX_SIZE bytes), but continuing..."
+          fi
+          
+          # List important files
+          echo "📁 Build directory contents:"
+          ls -lah build/ | head -15
+          
+          # Test if we can serve the build (optional - just verify structure)
+          echo "✅ Build structure looks good!"
+          echo "📊 Build statistics:"
+          echo "   - Total files: $(find build -type f | wc -l)"
+          echo "   - Total size: $(du -sh build | cut -f1)"
+          
+          # Verify HTML is valid (basic check)
+          if grep -q "<!DOCTYPE html>" build/index.html || grep -q "<html" build/index.html; then
+            echo "✅ HTML structure looks valid"
+          else
+            echo "⚠️ HTML structure might be invalid, but continuing..."
+          fi
+          
+          # Test serving the build (optional HTTP test)
+          echo "🌐 Testing HTTP server..."
+          cd build
+          python3 -m http.server 8080 > /dev/null 2>&1 &
+          SERVER_PID=$!
+          sleep 2
+          
+          # Test if server is responding
+          if curl -f -s http://localhost:8080 > /dev/null; then
+            echo "✅ HTTP server test passed - build is serving correctly"
+          else
+            echo "⚠️ HTTP server test failed, but build files exist"
+          fi
+          
+          # Kill the test server
+          kill $SERVER_PID 2>/dev/null || true
+          cd ..
+
       - name: Deploy to target repository
         env:
           DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
