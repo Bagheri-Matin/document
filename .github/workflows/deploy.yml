@@ -31,66 +31,99 @@ jobs:
         run: npm run build
 
       - name: Test build output
+        id: test-build-output
         run: |
           echo "🧪 Testing build output..."
           
-          # Check if build directory exists
           if [ ! -d "build" ]; then
             echo "❌ Build directory not found!"
             exit 1
           fi
           
-          # Check if index.html exists
           if [ ! -f "build/index.html" ]; then
             echo "❌ index.html not found in build directory!"
             exit 1
           fi
           
-          # Check if assets directory exists
           if [ ! -d "build/assets" ]; then
             echo "⚠️ Assets directory not found, but continuing..."
           fi
           
-          # Check file sizes (index.html should not be empty)
           INDEX_SIZE=$(stat -f%z build/index.html 2>/dev/null || stat -c%s build/index.html 2>/dev/null || echo "0")
           if [ "$INDEX_SIZE" -lt 1000 ]; then
             echo "⚠️ index.html seems too small ($INDEX_SIZE bytes), but continuing..."
           fi
           
-          # List important files
           echo "📁 Build directory contents:"
           ls -lah build/ | head -15
           
-          # Test if we can serve the build (optional - just verify structure)
           echo "✅ Build structure looks good!"
           echo "📊 Build statistics:"
           echo "   - Total files: $(find build -type f | wc -l)"
           echo "   - Total size: $(du -sh build | cut -f1)"
           
-          # Verify HTML is valid (basic check)
           if grep -q "<!DOCTYPE html>" build/index.html || grep -q "<html" build/index.html; then
             echo "✅ HTML structure looks valid"
           else
             echo "⚠️ HTML structure might be invalid, but continuing..."
           fi
           
-          # Test serving the build (optional HTTP test)
           echo "🌐 Testing HTTP server..."
           cd build
           python3 -m http.server 8080 > /dev/null 2>&1 &
           SERVER_PID=$!
           sleep 2
           
-          # Test if server is responding
           if curl -f -s http://localhost:8080 > /dev/null; then
             echo "✅ HTTP server test passed - build is serving correctly"
           else
             echo "⚠️ HTTP server test failed, but build files exist"
           fi
           
-          # Kill the test server
           kill $SERVER_PID 2>/dev/null || true
           cd ..
+
+      - name: Send Telegram notification on test failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHANNEL_LINK: ${{ secrets.TELEGRAM_CHANNEL_LINK }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            exit 0
+          fi
+          
+          CHANNEL_INFO=""
+          if [ -n "$TELEGRAM_CHANNEL_LINK" ]; then
+            CHANNEL_INFO="
+📢 *Channel:* $TELEGRAM_CHANNEL_LINK"
+          fi
+          
+          MESSAGE="❌ *Test Failed*
+
+📦 *Repository:* \`${{ github.repository }}\`
+🌿 *Branch:* \`${{ github.ref_name }}\`
+👤 *Author:* ${{ github.actor }}
+💬 *Commit:* \`${{ github.event.head_commit.message }}\`
+🔗 *Commit SHA:* \`${{ github.sha }}\`$CHANNEL_INFO
+
+❌ *Build tests failed*
+🔍 *Failed Step:* Test build output
+
+📋 *Possible reasons:*
+• Build directory not found
+• index.html missing
+• Invalid HTML structure
+• HTTP server test failed
+
+🔗 *View Logs:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          
+          curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            -d chat_id="$CHAT_ID" \
+            -d text="$MESSAGE" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview=true
 
       - name: Deploy to target repository
         env:
@@ -100,8 +133,6 @@ jobs:
         run: |
           echo "🚀 Starting deployment to $TARGET_REPO:$TARGET_BRANCH"
           
-          # Clone target repository
-          echo "📥 Cloning target repository..."
           if git clone --branch $TARGET_BRANCH --single-branch https://x-access-token:$DEPLOY_TOKEN@github.com/$TARGET_REPO.git target-repo 2>&1; then
             echo "✅ Branch $TARGET_BRANCH exists, cloned successfully"
           else
@@ -111,8 +142,6 @@ jobs:
           
           cd target-repo
           
-          # Checkout target branch or create it if it doesn't exist
-          echo "🔀 Checking out branch $TARGET_BRANCH..."
           if git checkout $TARGET_BRANCH 2>&1; then
             echo "✅ Switched to existing branch $TARGET_BRANCH"
           else
@@ -120,28 +149,22 @@ jobs:
             git checkout -b $TARGET_BRANCH
           fi
           
-          # Configure git
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           
-          # Remove all existing files (except .git)
           echo "🗑️ Removing existing files..."
           find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
           
-          # Copy build files to target repository
           echo "📋 Copying build files..."
           cp -r ../build/* .
           cp -r ../build/.[!.]* . 2>/dev/null || true
           
-          # Verify files were copied
           echo "🔍 Verifying files..."
           ls -la | head -20
           
-          # Add all changes
           echo "➕ Adding changes..."
           git add -A .
           
-          # Commit changes with original commit message
           COMMIT_MSG="${{ github.event.head_commit.message }}"
           if [ -z "$COMMIT_MSG" ]; then
             COMMIT_MSG="Deploy from ${{ github.repository }}@${{ github.sha }}"
@@ -149,11 +172,9 @@ jobs:
           
           echo "💬 Commit message: $COMMIT_MSG"
           
-          # Show status
           echo "📊 Git status:"
           git status --short
           
-          # Always commit and push (even if no changes, to ensure sync)
           echo "💾 Committing changes..."
           git commit -m "$COMMIT_MSG" || {
             echo "⚠️ No changes detected, but pushing anyway to ensure sync..."
@@ -164,3 +185,111 @@ jobs:
           git push origin $TARGET_BRANCH
           echo "✅ Deployment successful to $TARGET_REPO:$TARGET_BRANCH"
 
+      - name: Send Telegram notification on PR
+        if: github.event_name == 'pull_request'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHANNEL_LINK: ${{ secrets.TELEGRAM_CHANNEL_LINK }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            exit 0
+          fi
+          
+          CHANNEL_INFO=""
+          if [ -n "$TELEGRAM_CHANNEL_LINK" ]; then
+            CHANNEL_INFO="
+📢 *Channel:* $TELEGRAM_CHANNEL_LINK"
+          fi
+          
+          MESSAGE="📝 *New Pull Request*
+
+📦 *Repository:* \`${{ github.repository }}\`
+🔢 *PR Number:* #${{ github.event.pull_request.number }}
+📋 *Title:* ${{ github.event.pull_request.title }}
+👤 *Author:* ${{ github.event.pull_request.user.login }}
+🌿 *Branch:* \`${{ github.event.pull_request.head.ref }}\` → \`${{ github.event.pull_request.base.ref }}\`
+📝 *Description:*
+${{ github.event.pull_request.body }}$CHANNEL_INFO
+
+🔗 *View PR:* ${{ github.event.pull_request.html_url }}"
+          
+          curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            -d chat_id="$CHAT_ID" \
+            -d text="$MESSAGE" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview=true
+
+      - name: Send Telegram notification
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHANNEL_LINK: ${{ secrets.TELEGRAM_CHANNEL_LINK }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            exit 0
+          fi
+          
+          CHANNEL_INFO=""
+          if [ -n "$TELEGRAM_CHANNEL_LINK" ]; then
+            CHANNEL_INFO="
+📢 *Channel:* $TELEGRAM_CHANNEL_LINK"
+          fi
+          
+          if [ "${{ job.status }}" == "success" ]; then
+            MESSAGE="🎉 *Deployment Successful*
+
+📦 *Repository:* \`${{ github.repository }}\`
+🌿 *Branch:* \`${{ github.ref_name }}\`
+👤 *Author:* ${{ github.actor }}
+💬 *Commit:* \`${{ github.event.head_commit.message }}\`
+🔗 *Commit SHA:* \`${{ github.sha }}\`
+📅 *Time:* $(date '+%Y-%m-%d %H:%M:%S UTC')$CHANNEL_INFO
+
+✅ Build completed successfully
+✅ Tests passed
+✅ Deployed to: \`${{ secrets.TARGET_REPO }}\`
+
+🔗 *View Run:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          else
+            FAILED_STEP="Unknown"
+            if [ -f "$GITHUB_STEP_SUMMARY" ]; then
+              FAILED_STEP=$(grep -i "error\|failed" "$GITHUB_STEP_SUMMARY" | head -1 || echo "Check logs")
+            fi
+            
+            MESSAGE="❌ *Deployment Failed*
+
+📦 *Repository:* \`${{ github.repository }}\`
+🌿 *Branch:* \`${{ github.ref_name }}\`
+👤 *Author:* ${{ github.actor }}
+💬 *Commit:* \`${{ github.event.head_commit.message }}\`
+🔗 *Commit SHA:* \`${{ github.sha }}\`
+📅 *Time:* $(date '+%Y-%m-%d %H:%M:%S UTC')$CHANNEL_INFO
+
+❌ *Status:* Build or deployment failed
+🔍 *Failed Step:* $FAILED_STEP
+
+📋 *Possible reasons:*
+• Build errors
+• Test failures
+• Deployment issues
+• Missing dependencies
+
+🔗 *View Logs:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+          
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            PR_INFO="
+📝 *Pull Request:* #${{ github.event.pull_request.number }}
+📋 *PR Title:* ${{ github.event.pull_request.title }}"
+            MESSAGE="$MESSAGE$PR_INFO"
+          fi
+          
+          curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            -d chat_id="$CHAT_ID" \
+            -d text="$MESSAGE" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview=true
+          
+          echo "📱 Telegram notification sent"
