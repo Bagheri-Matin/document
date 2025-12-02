@@ -36,35 +36,69 @@ jobs:
           TARGET_REPO: ${{ secrets.TARGET_REPO }}
           TARGET_BRANCH: ${{ secrets.TARGET_BRANCH || 'main' }}
         run: |
+          echo "🚀 Starting deployment to $TARGET_REPO:$TARGET_BRANCH"
+          
           # Clone target repository
-          git clone --branch $TARGET_BRANCH --single-branch https://x-access-token:$DEPLOY_TOKEN@github.com/$TARGET_REPO.git target-repo 2>/dev/null || \
-          git clone --single-branch https://x-access-token:$DEPLOY_TOKEN@github.com/$TARGET_REPO.git target-repo
+          echo "📥 Cloning target repository..."
+          if git clone --branch $TARGET_BRANCH --single-branch https://x-access-token:$DEPLOY_TOKEN@github.com/$TARGET_REPO.git target-repo 2>&1; then
+            echo "✅ Branch $TARGET_BRANCH exists, cloned successfully"
+          else
+            echo "⚠️ Branch $TARGET_BRANCH doesn't exist, cloning default branch..."
+            git clone --single-branch https://x-access-token:$DEPLOY_TOKEN@github.com/$TARGET_REPO.git target-repo
+          fi
           
           cd target-repo
           
           # Checkout target branch or create it if it doesn't exist
-          git checkout $TARGET_BRANCH 2>/dev/null || git checkout -b $TARGET_BRANCH
+          echo "🔀 Checking out branch $TARGET_BRANCH..."
+          if git checkout $TARGET_BRANCH 2>&1; then
+            echo "✅ Switched to existing branch $TARGET_BRANCH"
+          else
+            echo "⚠️ Branch doesn't exist, creating new branch $TARGET_BRANCH..."
+            git checkout -b $TARGET_BRANCH
+          fi
           
           # Configure git
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           
           # Remove all existing files (except .git)
+          echo "🗑️ Removing existing files..."
           find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
           
           # Copy build files to target repository
+          echo "📋 Copying build files..."
           cp -r ../build/* .
           cp -r ../build/.[!.]* . 2>/dev/null || true
           
+          # Verify files were copied
+          echo "🔍 Verifying files..."
+          ls -la | head -20
+          
           # Add all changes
-          git add .
+          echo "➕ Adding changes..."
+          git add -A .
           
           # Commit changes with original commit message
           COMMIT_MSG="${{ github.event.head_commit.message }}"
-          git commit -m "$COMMIT_MSG" || echo "No changes to commit"
+          if [ -z "$COMMIT_MSG" ]; then
+            COMMIT_MSG="Deploy from ${{ github.repository }}@${{ github.sha }}"
+          fi
           
-          # Push changes
+          echo "💬 Commit message: $COMMIT_MSG"
+          
+          # Show status
+          echo "📊 Git status:"
+          git status --short
+          
+          # Always commit and push (even if no changes, to ensure sync)
+          echo "💾 Committing changes..."
+          git commit -m "$COMMIT_MSG" || {
+            echo "⚠️ No changes detected, but pushing anyway to ensure sync..."
+            git commit --allow-empty -m "$COMMIT_MSG"
+          }
+          
+          echo "📤 Pushing to $TARGET_BRANCH..."
           git push origin $TARGET_BRANCH
-          
           echo "✅ Deployment successful to $TARGET_REPO:$TARGET_BRANCH"
 
