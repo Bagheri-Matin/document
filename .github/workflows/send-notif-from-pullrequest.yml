@@ -33,25 +33,25 @@ jobs:
           BASE_REF="${{ github.event.pull_request.base.ref }}"
           PR_URL="${{ github.event.pull_request.html_url }}"
           
-          # Escape special characters for Markdown (escape backslash first, then other chars)
-          PR_TITLE_ESC=$(echo "$PR_TITLE" | sed 's/\\/\\\\/g' | sed 's/[_*[\]()~`>#+=|{}.!-]/\\&/g')
-          PR_BODY_ESC=$(echo "$PR_BODY" | sed 's/\\/\\\\/g' | sed 's/[_*[\]()~`>#+=|{}.!-]/\\&/g' | head -c 1000)
+          # Escape HTML special characters
+          PR_TITLE_ESC=$(echo "$PR_TITLE" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
+          PR_BODY_ESC=$(echo "$PR_BODY" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g' | head -c 1000)
           
           # Add channel link if provided
           CHANNEL_INFO=""
           if [ -n "$TELEGRAM_CHANNEL_LINK" ]; then
-            CHANNEL_INFO=$'\n'"📢 *Channel:* $TELEGRAM_CHANNEL_LINK"
+            CHANNEL_INFO=$'\n'"📢 <b>Channel:</b> $TELEGRAM_CHANNEL_LINK"
           fi
           
-          # Build message with proper newlines
-          MESSAGE="📝 *New Pull Request*"$'\n\n'"📦 *Repository:* \`${REPO}\`"$'\n'"🔢 *PR Number:* #${PR_NUMBER}"$'\n'"📋 *Title:* ${PR_TITLE_ESC}"$'\n'"👤 *Author:* ${AUTHOR}"$'\n'"🌿 *Branch:* \`${HEAD_REF}\` → \`${BASE_REF}\`"$'\n'"📝 *Description:*"$'\n'"${PR_BODY_ESC}${CHANNEL_INFO}"$'\n\n'"🔗 *View PR:* ${PR_URL}"
+          # Build message with HTML formatting
+          MESSAGE="📝 <b>New Pull Request</b>"$'\n\n'"📦 <b>Repository:</b> <code>${REPO}</code>"$'\n'"🔢 <b>PR Number:</b> #${PR_NUMBER}"$'\n'"📋 <b>Title:</b> ${PR_TITLE_ESC}"$'\n'"👤 <b>Author:</b> ${AUTHOR}"$'\n'"🌿 <b>Branch:</b> <code>${HEAD_REF}</code> → <code>${BASE_REF}</code>"$'\n'"📝 <b>Description:</b>"$'\n'"${PR_BODY_ESC}${CHANNEL_INFO}"$'\n\n'"🔗 <a href=\"${PR_URL}\">View PR</a>"
           
           # Send message to Telegram and capture response
           echo "Sending notification to Telegram..."
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
             -d chat_id="$TELEGRAM_CHAT_ID" \
             --data-urlencode "text=$MESSAGE" \
-            -d parse_mode="Markdown" \
+            -d parse_mode="HTML" \
             -d disable_web_page_preview=true)
           
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
